@@ -7,13 +7,11 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 const int ISR_PIN = 2;
 const int MINUTES_BUTTON_PIN = 4;
 const int SECONDS_BUTTON_PIN = 5;
-const int START_STOP_BUTTON_PIN = 3;
+const int START_STOP_BUTTON_PIN = 7;
 const int BUZZER_PIN = 6;
 
 // --- Flags ---
 volatile bool buttonTriggered = false;
-volatile bool minutesPressed = false;
-volatile bool secondsPressed = false;
 
 // --- Timer variables ---
 bool running = false;
@@ -41,7 +39,7 @@ void setup() {
   pinMode(START_STOP_BUTTON_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
 
-  attachInterrupt(digitalPinToInterrupt(ISR_PIN), ISR_addTime, FALLING);
+  attachInterrupt(digitalPinToInterrupt(ISR_PIN), ISR_button, FALLING);
 
   displayInitialScreen();
 }
@@ -49,23 +47,14 @@ void setup() {
 void loop() {
   now = millis();
   handleISRTrigger();
-  handleStartStopButton();
   handleCountdown();
   handleBuzzer();
   updateLCD();
 }
 
-// --- ISR: set flags for minutes/seconds ---
-void ISR_addTime() {
+// --- ISR: only flag ---
+void ISR_button() {
   buttonTriggered = true;
-
-  if (digitalRead(MINUTES_BUTTON_PIN) == LOW) {
-    minutesPressed = true;
-  }
-
-  if (digitalRead(SECONDS_BUTTON_PIN) == LOW) {
-    secondsPressed = true;
-  }
 }
 
 // --- Handle ISR trigger ---
@@ -74,23 +63,16 @@ void handleISRTrigger() {
     buttonTriggered = false;
     lastDebounce = now;
 
-    if (minutesPressed) {
+    // Identify which button caused interrupt
+    if (digitalRead(MINUTES_BUTTON_PIN) == LOW) {
       totalSeconds += 60;
-      minutesPressed = false;
-    }
-
-    if (secondsPressed) {
+    } 
+    else if (digitalRead(SECONDS_BUTTON_PIN) == LOW) {
       totalSeconds += 10;
-      secondsPressed = false;
+    } 
+    else if (digitalRead(START_STOP_BUTTON_PIN) == LOW) {
+      handleStartStop();
     }
-  }
-}
-
-// --- Handle Start/Stop button ---
-void handleStartStopButton() {
-  if (digitalRead(START_STOP_BUTTON_PIN) == LOW && now - lastDebounce > debounceDelay) {
-    handleStartStop();
-    lastDebounce = now;
   }
 }
 
@@ -109,7 +91,7 @@ void handleCountdown() {
   }
 }
 
-// --- Non-blocking buzzer (5 beeps) ---
+// --- buzzer makes 5 beeps ---
 void handleBuzzer() {
   if (!buzzerActive) return;
 
