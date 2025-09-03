@@ -1,7 +1,12 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 
+// --- LCD setup ---
 LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// --- States ---
+enum State { RUNNING, PAUSED, READY, DONE };
+const char* stateMessages[] = { "RUNNING", "PAUSED ", "READY  ", "DONE   " };
 
 // --- Pin definitions ---
 const int ISR_PIN = 2;
@@ -14,11 +19,11 @@ const int BUZZER_PIN = 6;
 volatile bool buttonTriggered = false;
 
 // --- Timer variables ---
-bool running = false;
+State current_state;
 bool buzzerActive = false;
 
 unsigned long lastDebounce = 0;
-const unsigned long debounceDelay = 250;
+const unsigned long debounceDelay = 100;
 
 int totalSeconds = 0;
 unsigned long lastTick = 0;
@@ -30,9 +35,17 @@ int clickCount = 0;
 unsigned long lastClickTime = 0;
 const unsigned long clickWindow = 600;
 
+// --- Time tracker ---
 unsigned long now = 0;
 
+// --- Button commands ---
+bool minutesPressed = false;
+bool secondsPressed = false;
+bool startStopPressed = false;
+
 void setup() {
+  current_state = READY;
+
   pinMode(ISR_PIN, INPUT_PULLUP);
   pinMode(MINUTES_BUTTON_PIN, INPUT_PULLUP);
   pinMode(SECONDS_BUTTON_PIN, INPUT_PULLUP);
@@ -46,52 +59,86 @@ void setup() {
 
 void loop() {
   now = millis();
-  handleISRTrigger();
-  handleCountdown();
+
+  checkButtons();
+  handleStateMachine();
   handleBuzzer();
   updateLCD();
 }
 
-// --- ISR: only flag ---
 void ISR_button() {
   buttonTriggered = true;
 }
 
-// --- Handle ISR trigger ---
-void handleISRTrigger() {
+void checkButtons() {
+  minutesPressed = false;
+  secondsPressed = false;
+  startStopPressed = false;
+
   if (buttonTriggered && now - lastDebounce > debounceDelay) {
     buttonTriggered = false;
     lastDebounce = now;
 
-    // Identify which button caused interrupt
-    if (digitalRead(MINUTES_BUTTON_PIN) == LOW) {
-      totalSeconds += 60;
-    } 
-    else if (digitalRead(SECONDS_BUTTON_PIN) == LOW) {
-      totalSeconds += 10;
-    } 
-    else if (digitalRead(START_STOP_BUTTON_PIN) == LOW) {
-      handleStartStop();
-    }
+    if (digitalRead(MINUTES_BUTTON_PIN) == LOW) minutesPressed = true;
+    else if (digitalRead(SECONDS_BUTTON_PIN) == LOW) secondsPressed = true;
+    else if (digitalRead(START_STOP_BUTTON_PIN) == LOW) startStopPressed = true;
   }
 }
 
-// --- Timer countdown ---
-void handleCountdown() {
-  if (running && totalSeconds > 0 && now - lastTick >= 1000) {
+void handleStateMachine() {
+  switch (current_state) {
+    case READY:   handleReady();   break;
+    case PAUSED:  handlePaused();  break;
+    case RUNNING: handleRunning(); break;
+    case DONE:    handleDone();    break;
+  }
+}
+
+void handleReady() {
+  if (minutesPressed) totalSeconds += 60;
+  if (secondsPressed) totalSeconds += 10;
+  if (totalSeconds > 0 && (minutesPressed || secondsPressed)) {
+    current_state = PAUSED;
+  }
+}
+
+void handlePaused() {
+  if (minutesPressed) totalSeconds += 60;
+  if (secondsPressed) totalSeconds += 10;
+
+  if (startStopPressed) {
+    handleStartStop();
+  }
+}
+
+void handleRunning() {
+  // allow time increase while running
+  if (minutesPressed) totalSeconds += 60;
+  if (secondsPressed) totalSeconds += 10;
+
+  if (totalSeconds > 0 && now - lastTick >= 1000) {
     totalSeconds--;
     lastTick = now;
   }
 
-  if (running && totalSeconds == 0 && !buzzerActive) {
-    running = false;
+  if (totalSeconds == 0) {
+    current_state = DONE;
     buzzerActive = true;
     buzzerCount = 0;
     buzzerStart = now;
   }
+
+  if (startStopPressed) {
+    handleStartStop();
+  }
 }
 
-// --- buzzer makes 5 beeps ---
+void handleDone() {
+  if (!buzzerActive) {
+    current_state = READY;
+  }
+}
+
 void handleBuzzer() {
   if (!buzzerActive) return;
 
@@ -115,12 +162,9 @@ void handleBuzzer() {
   }
 }
 
-// --- Update LCD ---
 void updateLCD() {
   lcd.setCursor(0, 0);
-  if (totalSeconds == 0 && !running) lcd.print("Ready   ");
-  else if (running) lcd.print("Running ");
-  else lcd.print("Paused  ");
+  lcd.print(stateMessages[current_state]);
 
   int displayMinutes = totalSeconds / 60;
   int displaySeconds = totalSeconds % 60;
@@ -132,17 +176,15 @@ void updateLCD() {
   lcd.print(displaySeconds);
 }
 
-// --- Initial LCD screen ---
 void displayInitialScreen() {
   lcd.init();
   lcd.backlight();
   lcd.setCursor(0, 0);
-  lcd.print("Ready");
+  lcd.print("Set     ");
   lcd.setCursor(0, 1);
   lcd.print("Time: 00:00");
 }
 
-// --- Handle Start/Stop with triple click reset ---
 void handleStartStop() {
   if (now - lastClickTime <= clickWindow) {
     clickCount++;
@@ -153,7 +195,7 @@ void handleStartStop() {
 
   if (clickCount == 3) {
     totalSeconds = 0;
-    running = false;
+    current_state = READY;
     buzzerActive = false;
     noTone(BUZZER_PIN);
     clickCount = 0;
@@ -161,6 +203,7 @@ void handleStartStop() {
   }
 
   if (totalSeconds > 0 && clickCount == 1) {
-    running = !running;
+    if (current_state == RUNNING) current_state = PAUSED;
+    else current_state = RUNNING;
   }
 }
