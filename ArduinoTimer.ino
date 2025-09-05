@@ -7,21 +7,30 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 // --- States ---
 enum State { RUNNING, PAUSED, READY, DONE };
 const char* stateMessages[] = { "RUNNING", "PAUSED ", "READY  ", "DONE   " };
+State currentState = READY;
+
+// --- Events ---
+enum Event {
+  NONE,
+  MINUTES_PRESSED,
+  SECONDS_PRESSED,
+  START_STOP_PRESSED,
+  START_STOP_TRIPLE_PRESSED,
+  TIME_ELAPSED,
+  BUZZER_STOPPED
+};
 
 // --- Pin definitions ---
-const int ISR_PIN = 2;
-const int MINUTES_BUTTON_PIN = 4;
-const int SECONDS_BUTTON_PIN = 5;
+const int ISR_PIN               = 2;
+const int MINUTES_BUTTON_PIN    = 4;
+const int SECONDS_BUTTON_PIN    = 5;
+const int BUZZER_PIN            = 6;
 const int START_STOP_BUTTON_PIN = 7;
-const int BUZZER_PIN = 6;
 
 // --- Flags ---
 volatile bool buttonTriggered = false;
 
 // --- Timer variables ---
-State current_state;
-bool buzzerActive = false;
-
 unsigned long lastDebounce = 0;
 const unsigned long debounceDelay = 100;
 
@@ -38,14 +47,24 @@ const unsigned long clickWindow = 600;
 // --- Time tracker ---
 unsigned long now = 0;
 
-// --- Button commands ---
-bool minutesPressed = false;
-bool secondsPressed = false;
-bool startStopPressed = false;
+// --- Function declarations ---
+void ISR_button();
+Event getEvent();
+void handleEvent(Event event);
+void updateLCD();
+void displayInitialScreen();
+bool isKeyPressed(int pin);
+void updateTotalSeconds();
+void startBuzzer();
+void stopBuzzer();
+
+// --- State Handlers ---
+void stateReadyReactOn(Event event);
+void statePausedReactOn(Event event);
+void stateRunningReactOn(Event event);
+void stateDoneReactOn(Event event);
 
 void setup() {
-  current_state = READY;
-
   pinMode(ISR_PIN, INPUT_PULLUP);
   pinMode(MINUTES_BUTTON_PIN, INPUT_PULLUP);
   pinMode(SECONDS_BUTTON_PIN, INPUT_PULLUP);
@@ -60,9 +79,9 @@ void setup() {
 void loop() {
   now = millis();
 
-  checkButtons();
-  handleStateMachine();
-  handleBuzzer();
+  Event event = getEvent();
+  if (event != NONE)
+    handleEvent(event);
   updateLCD();
 }
 
@@ -70,101 +89,157 @@ void ISR_button() {
   buttonTriggered = true;
 }
 
-void checkButtons() {
-  minutesPressed = false;
-  secondsPressed = false;
-  startStopPressed = false;
+bool isKeyPressed(int pin) {
+  return digitalRead(pin) == LOW;
+}
 
+Event getEvent() {
   if (buttonTriggered && now - lastDebounce > debounceDelay) {
     buttonTriggered = false;
     lastDebounce = now;
 
-    if (digitalRead(MINUTES_BUTTON_PIN) == LOW) minutesPressed = true;
-    else if (digitalRead(SECONDS_BUTTON_PIN) == LOW) secondsPressed = true;
-    else if (digitalRead(START_STOP_BUTTON_PIN) == LOW) startStopPressed = true;
+    if (isKeyPressed(SECONDS_BUTTON_PIN))
+      return SECONDS_PRESSED;
+    if (isKeyPressed(MINUTES_BUTTON_PIN))
+      return MINUTES_PRESSED;
+    if (isKeyPressed(START_STOP_BUTTON_PIN)) {
+      if (now - lastClickTime <= clickWindow) {
+        lastClickTime = now;
+        clickCount++;
+        if (clickCount == 3) {
+          clickCount = 0;
+          return START_STOP_TRIPLE_PRESSED;
+        }
+        return NONE;
+      }
+
+      lastClickTime = now;
+      clickCount = 0;
+
+      return START_STOP_PRESSED;
+    }
   }
-}
 
-void handleStateMachine() {
-  switch (current_state) {
-    case READY:   handleReady();   break;
-    case PAUSED:  handlePaused();  break;
-    case RUNNING: handleRunning(); break;
-    case DONE:    handleDone();    break;
-  }
-}
-
-void handleReady() {
-  if (minutesPressed) totalSeconds += 60;
-  if (secondsPressed) totalSeconds += 10;
-  if (totalSeconds > 0 && (minutesPressed || secondsPressed)) {
-    current_state = PAUSED;
-  }
-}
-
-void handlePaused() {
-  if (minutesPressed) totalSeconds += 60;
-  if (secondsPressed) totalSeconds += 10;
-
-  if (startStopPressed) {
-    handleStartStop();
-  }
-}
-
-void handleRunning() {
-  // allow time increase while running
-  if (minutesPressed) totalSeconds += 60;
-  if (secondsPressed) totalSeconds += 10;
-
-  if (totalSeconds > 0 && now - lastTick >= 1000) {
+  if (currentState == RUNNING && totalSeconds > 0 && now - lastTick >= 1000) {
     totalSeconds--;
     lastTick = now;
+    if (totalSeconds == 0) {
+      return TIME_ELAPSED;
+    }
   }
 
-  if (totalSeconds == 0) {
-    current_state = DONE;
-    buzzerActive = true;
-    buzzerCount = 0;
-    buzzerStart = now;
+  if (currentState == DONE && buzzerCount >= 5 && now - buzzerStart >= 200) {
+    return BUZZER_STOPPED;
   }
 
-  if (startStopPressed) {
-    handleStartStop();
+  return NONE;
+}
+
+void handleEvent(Event event) {
+  switch (currentState) {
+    case READY:   stateReadyReactOn(event);   break;
+    case PAUSED:  statePausedReactOn(event);  break;
+    case RUNNING: stateRunningReactOn(event); break;
+    case DONE:    stateDoneReactOn(event);    break;
   }
 }
 
-void handleDone() {
-  if (!buzzerActive) {
-    current_state = READY;
+void stateReadyReactOn(Event event) {
+  switch (event) {
+    case MINUTES_PRESSED:
+    case SECONDS_PRESSED:
+      updateTotalSeconds();
+      if (totalSeconds > 0) {
+        currentState = PAUSED;
+      }
+      break;
+
+    default:
+      break;
   }
 }
 
-void handleBuzzer() {
-  if (!buzzerActive) return;
+void statePausedReactOn(Event event) {
+  switch (event) {
+    case MINUTES_PRESSED:
+    case SECONDS_PRESSED:
+      updateTotalSeconds();
+      break;
 
-  if (digitalRead(START_STOP_BUTTON_PIN) == LOW) {
-    buzzerActive = false;
-    noTone(BUZZER_PIN);
-    return;
-  }
+    case START_STOP_PRESSED:
+      if (totalSeconds > 0) {
+        currentState = RUNNING;
+      }
+      break;
 
-  if (buzzerCount < 5) {
-    if (now - buzzerStart >= 300) {
-      tone(BUZZER_PIN, 1000, 200);
-      buzzerStart = now;
-      buzzerCount++;
-    }
-  } else {
-    if (now - buzzerStart >= 200) {
-      buzzerActive = false;
-      noTone(BUZZER_PIN);
-    }
+    case START_STOP_TRIPLE_PRESSED:
+      totalSeconds = 0;
+      currentState = READY;
+      break;
+
+    default:
+      break;
   }
+}
+
+void stateRunningReactOn(Event event) {
+  switch (event) {
+    case MINUTES_PRESSED:
+    case SECONDS_PRESSED:
+      updateTotalSeconds();
+      break;
+
+    case START_STOP_PRESSED:
+      currentState = PAUSED;
+      break;
+
+    case START_STOP_TRIPLE_PRESSED:
+      totalSeconds = 0;
+      currentState = READY;
+      break;
+
+    case TIME_ELAPSED:
+      startBuzzer();
+      currentState = DONE;
+      break;
+
+    default:
+      break;
+  }
+}
+
+void stateDoneReactOn(Event event) {
+  switch (event) {
+    case START_STOP_PRESSED:
+    case BUZZER_STOPPED:
+      stopBuzzer();
+      currentState = READY;
+      break;
+
+    default:
+      break;
+  }
+}
+
+void updateTotalSeconds() {
+  if (isKeyPressed(MINUTES_BUTTON_PIN)) totalSeconds += 60;
+  if (isKeyPressed(SECONDS_BUTTON_PIN)) totalSeconds += 10;
+}
+
+void startBuzzer() {
+  buzzerCount = 0;
+  buzzerStart = now;
+  tone(BUZZER_PIN, 1000, 200);
+}
+
+void stopBuzzer() {
+  noTone(BUZZER_PIN);
+  buzzerCount = 0;
 }
 
 void updateLCD() {
   lcd.setCursor(0, 0);
-  lcd.print(stateMessages[current_state]);
+  lcd.print(stateMessages[currentState]);
 
   int displayMinutes = totalSeconds / 60;
   int displaySeconds = totalSeconds % 60;
@@ -183,27 +258,4 @@ void displayInitialScreen() {
   lcd.print("Set     ");
   lcd.setCursor(0, 1);
   lcd.print("Time: 00:00");
-}
-
-void handleStartStop() {
-  if (now - lastClickTime <= clickWindow) {
-    clickCount++;
-  } else {
-    clickCount = 1;
-  }
-  lastClickTime = now;
-
-  if (clickCount == 3) {
-    totalSeconds = 0;
-    current_state = READY;
-    buzzerActive = false;
-    noTone(BUZZER_PIN);
-    clickCount = 0;
-    return;
-  }
-
-  if (totalSeconds > 0 && clickCount == 1) {
-    if (current_state == RUNNING) current_state = PAUSED;
-    else current_state = RUNNING;
-  }
 }

@@ -1,0 +1,23 @@
+digraph StateMachine {
+    rankdir=LR;
+    node [shape=ellipse];
+
+    // States
+    READY [label="READY"];
+    PAUSED [label="PAUSED"];
+    RUNNING [label="RUNNING"];
+    DONE [label="DONE"];
+
+    // Transitions
+    READY   -> PAUSED    [ label="MINUTES_PRESSED|\nSECONDS_PRESSED"];
+
+    PAUSED  -> RUNNING   [ label="START_STOP_PRESSED"];
+    PAUSED  -> READY     [ label="START_STOP_TRIPLE_PRESSED"];
+
+    RUNNING -> PAUSED    [ label="START_STOP_PRESSED"];
+    RUNNING -> READY     [ label="START_STOP_TRIPLE_PRESSED"];
+    RUNNING -> DONE      [ label="TIME_ELAPSED"];
+    RUNNING -> RUNNING   [ label="MINUTES_PRESSED|\nSECONDS_PRESSED"];
+
+    DONE    -> READY     [ label="START_STOP_PRESSED|\nBUZZER_STOPPED"];
+}
