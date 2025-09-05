@@ -43,6 +43,18 @@ bool minutesPressed = false;
 bool secondsPressed = false;
 bool startStopPressed = false;
 
+void ISR_button();
+void checkButtons();
+void handleStateMachine();
+void handleReady();
+void handlePaused();
+void handleRunning();
+void handleDone();
+void handleBuzzer();
+void updateLCD();
+void displayInitialScreen();
+void handleStartStop();
+
 void setup() {
   current_state = READY;
 
