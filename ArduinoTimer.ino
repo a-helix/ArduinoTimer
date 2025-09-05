@@ -54,6 +54,8 @@ void handleBuzzer();
 void updateLCD();
 void displayInitialScreen();
 void handleStartStop();
+bool isKeyPressed(int pin);
+void updateTotalSeconds();
 
 void setup() {
   current_state = READY;
@@ -82,6 +84,10 @@ void ISR_button() {
   buttonTriggered = true;
 }
 
+bool isKeyPressed(int pin) {
+  return digitalRead(pin) == LOW;
+}
+
 void checkButtons() {
   minutesPressed = false;
   secondsPressed = false;
@@ -91,9 +97,9 @@ void checkButtons() {
     buttonTriggered = false;
     lastDebounce = now;
 
-    if (digitalRead(MINUTES_BUTTON_PIN) == LOW) minutesPressed = true;
-    else if (digitalRead(SECONDS_BUTTON_PIN) == LOW) secondsPressed = true;
-    else if (digitalRead(START_STOP_BUTTON_PIN) == LOW) startStopPressed = true;
+    if      (isKeyPressed(MINUTES_BUTTON_PIN))    minutesPressed   = true;
+    else if (isKeyPressed(SECONDS_BUTTON_PIN))    secondsPressed   = true;
+    else if (isKeyPressed(START_STOP_BUTTON_PIN)) startStopPressed = true;
   }
 }
 
@@ -106,17 +112,21 @@ void handleStateMachine() {
   }
 }
 
-void handleReady() {
+void updateTotalSeconds() {
   if (minutesPressed) totalSeconds += 60;
   if (secondsPressed) totalSeconds += 10;
+}
+
+void handleReady() {
+  updateTotalSeconds();
+
   if (totalSeconds > 0 && (minutesPressed || secondsPressed)) {
     current_state = PAUSED;
   }
 }
 
 void handlePaused() {
-  if (minutesPressed) totalSeconds += 60;
-  if (secondsPressed) totalSeconds += 10;
+  updateTotalSeconds();
 
   if (startStopPressed) {
     handleStartStop();
@@ -125,8 +135,7 @@ void handlePaused() {
 
 void handleRunning() {
   // allow time increase while running
-  if (minutesPressed) totalSeconds += 60;
-  if (secondsPressed) totalSeconds += 10;
+  updateTotalSeconds();
 
   if (totalSeconds > 0 && now - lastTick >= 1000) {
     totalSeconds--;
@@ -154,7 +163,7 @@ void handleDone() {
 void handleBuzzer() {
   if (!buzzerActive) return;
 
-  if (digitalRead(START_STOP_BUTTON_PIN) == LOW) {
+  if (isKeyPressed(START_STOP_BUTTON_PIN)) {
     buzzerActive = false;
     noTone(BUZZER_PIN);
     return;
